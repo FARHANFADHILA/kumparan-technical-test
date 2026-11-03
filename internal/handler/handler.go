@@ -50,7 +50,7 @@ func decodeCursor(s string) (time.Time, string, error) {
 	if err := json.Unmarshal(b, &c); err != nil {
 		return time.Time{}, "", err
 	}
-	if c.ID == "" {
+	if c.ID == "" || c.CreatedAt.IsZero() {
 		return time.Time{}, "", errors.New("cursor tidak valid")
 	}
 	return c.CreatedAt, c.ID, nil
@@ -69,8 +69,16 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 }
 
 func (h *Handler) CreateArticle(w http.ResponseWriter, r *http.Request) {
+	// Batasi body sebelum di-decode: 1.000.000 byte + 1 byte pendeteksi
+	// kelebihan. Tanpa ini, validasi panjang body di bawah baru jalan
+	// setelah seluruh body (yang bisa sangat besar) dibaca ke memori.
+	r.Body = http.MaxBytesReader(w, r.Body, 1000001)
 	var req createRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if strings.Contains(err.Error(), "request body too large") {
+			writeError(w, http.StatusBadRequest, "validation_error", "body terlalu besar, maksimal 1.000.000 byte")
+			return
+		}
 		writeError(w, http.StatusBadRequest, "invalid_json", "body JSON tidak valid")
 		return
 	}
@@ -80,6 +88,10 @@ func (h *Handler) CreateArticle(w http.ResponseWriter, r *http.Request) {
 
 	if req.AuthorID == "" || req.Title == "" || req.Body == "" {
 		writeError(w, http.StatusBadRequest, "validation_error", "author_id, title, dan body wajib diisi")
+		return
+	}
+	if len(req.Title) > 1000 {
+		writeError(w, http.StatusBadRequest, "validation_error", "title terlalu panjang, maksimal 1000 byte")
 		return
 	}
 	if len(req.Body) >= 1000000 {
@@ -105,6 +117,10 @@ func (h *Handler) ListArticles(w http.ResponseWriter, r *http.Request) {
 		Query:  strings.TrimSpace(q.Get("query")),
 		Author: strings.TrimSpace(q.Get("author")),
 		Limit:  20,
+	}
+	if len(filter.Query) > 1000 {
+		writeError(w, http.StatusBadRequest, "validation_error", "query terlalu panjang, maksimal 1000 byte")
+		return
 	}
 	if v := q.Get("limit"); v != "" {
 		n, err := strconv.Atoi(v)

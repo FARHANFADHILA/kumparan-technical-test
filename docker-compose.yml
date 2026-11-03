@@ -1,0 +1,16 @@
+services:
+  db:
+    image: postgres:16
+    container_name: kumparan-articles-db
+    environment:
+      POSTGRES_USER: kumparan
+      POSTGRES_PASSWORD: kumparan_dev
+      POSTGRES_DB: kumparan_articles
+    ports:
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./migrations:/docker-entrypoint-initdb.d
+
+volumes:
+  pgdata:
