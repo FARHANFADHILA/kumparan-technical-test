@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"time"
+	"github.com/joho/godotenv"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"kumparan-articles/internal/handler"
@@ -13,6 +14,7 @@ import (
 )
 
 func main() {
+	_= godotenv.Load()
 	databaseURL := os.Getenv("DATABASE_URL")
 	if databaseURL == "" {
 		log.Fatal("DATABASE_URL belum di-set")
