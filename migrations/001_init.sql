@@ -1,3 +1,5 @@
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
 CREATE TABLE IF NOT EXISTS authors (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL
@@ -28,3 +30,8 @@ CREATE INDEX IF NOT EXISTS idx_articles_author_created
 
 CREATE INDEX IF NOT EXISTS idx_authors_lower_name
   ON authors (lower(name));
+
+-- Partial author-name search (LIKE '%...%'): trigram index, so a search
+-- like 'Budi' also matches 'Budi Santoso' without a sequential scan.
+CREATE INDEX IF NOT EXISTS idx_authors_name_trgm
+  ON authors USING gin (lower(name) gin_trgm_ops);

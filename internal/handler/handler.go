@@ -1,23 +1,34 @@
 package handler
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 
 	"kumparan-articles/internal/repository"
+	"kumparan-articles/internal/search"
 )
 
 type Handler struct {
-	repo *repository.Repository
+	repo   *repository.Repository
+	search *search.Client
 }
 
 func New(repo *repository.Repository) *Handler {
 	return &Handler{repo: repo}
+}
+
+// NewWithSearch sama seperti New, ditambah client Meilisearch.
+// Kalau client-nya nil atau tidak enabled, handler tetap jalan
+// dengan Postgres saja, jadi konstruktor lama di tes tidak rusak.
+func NewWithSearch(repo *repository.Repository, searchClient *search.Client) *Handler {
+	return &Handler{repo: repo, search: searchClient}
 }
 
 type createRequest struct {
@@ -63,7 +74,9 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 }
 
 func writeError(w http.ResponseWriter, status int, code, message string) {
-	writeJSON(w, status, map[string]any{
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]any{
 		"error": map[string]string{"code": code, "message": message},
 	})
 }
@@ -108,7 +121,39 @@ func (h *Handler) CreateArticle(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "terjadi kesalahan server")
 		return
 	}
+	// Salinan ke Meilisearch, kalau dikonfigurasi. Gagal di sini TIDAK
+	// membatalkan POST, karena data asli sudah aman di Postgres.
+	// Artikel yang gagal diindeks bisa diindeks ulang lewat bulk.
+	if h.search != nil && h.search.Enabled() {
+		if err := h.search.IndexArticle(r.Context(), art); err != nil {
+			log.Printf("meilisearch index gagal untuk %s: %v (artikel tetap tersimpan di Postgres)", art.ID, err)
+		}
+	}
 	writeJSON(w, http.StatusCreated, art)
+}
+
+// listViaSearch adalah jalur Meilisearch untuk GET dengan query:
+// cari id di Meilisearch, ambil artikel lengkap dari Postgres,
+// susun ulang sesuai urutan Meilisearch. Bentuk hasil dan logika
+// limit+1-nya sama persis dengan repo.List, supaya handler di bawah
+// bisa memakai logika next_cursor yang sama tanpa perubahan.
+func (h *Handler) listViaSearch(ctx context.Context, filter repository.ListFilter) ([]*repository.Article, error) {
+	var authorIDs []string
+	if filter.Author != "" {
+		ids, err := h.repo.AuthorIDs(ctx, filter.Author)
+		if err != nil {
+			return nil, err
+		}
+		if len(ids) == 0 {
+			return []*repository.Article{}, nil
+		}
+		authorIDs = ids
+	}
+	ids, err := h.search.SearchIDs(ctx, filter.Query, authorIDs, filter.CursorCreatedAt, filter.CursorID, filter.Limit)
+	if err != nil {
+		return nil, err
+	}
+	return h.repo.GetByIDs(ctx, ids)
 }
 
 func (h *Handler) ListArticles(w http.ResponseWriter, r *http.Request) {
@@ -143,7 +188,21 @@ func (h *Handler) ListArticles(w http.ResponseWriter, r *http.Request) {
 		filter.CursorID = id
 	}
 
-	arts, err := h.repo.List(r.Context(), filter)
+	var arts []*repository.Article
+	var err error
+	// Jalur Meilisearch hanya untuk GET dengan query dan hanya kalau
+	// client dikonfigurasi. Kalau Meilisearch gagal apa pun alasannya,
+	// fallback ke Postgres (MATERIALIZED), bukan 500, supaya frontend
+	// tetap dapat hasil dengan bentuk yang sama.
+	if filter.Query != "" && h.search != nil && h.search.Enabled() {
+		arts, err = h.listViaSearch(r.Context(), filter)
+		if err != nil {
+			log.Printf("meilisearch search gagal, fallback ke Postgres: %v", err)
+			arts, err = h.repo.List(r.Context(), filter)
+		}
+	} else {
+		arts, err = h.repo.List(r.Context(), filter)
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal_error", "terjadi kesalahan server")
 		return

@@ -172,14 +172,17 @@ karena banyak artikel bisa berbagi `created_at` yang sama. Server mengambil
   Tidak ada ranking (`setweight`/`ts_rank`) karena soal memerintahkan
   urutan terbaru dulu, bukan relevansi. Memberi bobot tanpa mengubah
   urutan tidak ada efeknya; mengubah urutan akan melanggar soal.
-- **Filter penulis mengembang ke SEMUA id dengan nama itu.**
-  Nama penulis tidak unik di soal, jadi `author=Budi Santoso` harus
-  mengembalikan artikel dari semua `authors.id` yang namanya sama,
-  lewat `author_id = ANY($ids)`, tidak pernah diam-diam memilih satu id.
-  Pencocokan case-insensitive dengan `lower(name) = lower($1)` dan indeks
-  `lower(name)`. Indeks itu hanya melayani pencocokan persis, bukan
-  `LIKE 'bud%'` atau `LIKE '%udi%'` (yang butuh `text_pattern_ops` atau
-  `pg_trgm`); karena query kita persis, indeks itu sudah cocok.
+- **Filter penulis: partial contains, mengembang ke SEMUA id yang namanya mengandung fragment itu.**
+  Nama penulis tidak unik di soal, jadi `author=Budi` harus mengembalikan
+  artikel dari semua `authors.id` yang namanya mengandung "Budi" (misalnya
+  kedua Budi Santoso), lewat `author_id = ANY($ids)`, tidak pernah diam-diam
+  memilih satu id. Pencocokan case-insensitive dengan
+  `lower(name) LIKE '%' || lower($1) || '%'`, dengan wildcard `%`/`_` dari
+  input di-escape (karakter escape `!`) supaya input seperti `%` tidak
+  mencocokkan semua penulis. Index trigram
+  `idx_authors_name_trgm ON authors USING gin (lower(name) gin_trgm_ops)`
+  (extension `pg_trgm`, lihat `migrations/001_init.sql`) melayani pencarian
+  contains ini tanpa sequential scan; index `lower(name)` lama tetap ada.
 - **Kolom `NOT NULL`, autovacuum agresif, dan guard body.**
   `DEFAULT now()` saja masih mengizinkan NULL eksplisit, dan NULL akan
   merusak pagination keyset karena perbandingan dengan NULL tidak pernah
@@ -280,8 +283,11 @@ hilang. Tes integrasi di-skip kalau `TEST_DATABASE_URL` tidak di-set.
 ## Transparansi penggunaan AI
 
 Bagian yang dibantu AI: eksplorasi ide desain, draf awal kode dan
-dokumentasi, dan peninjauan kode. Keputusan akhir, pengujian, dan
-perbaikan adalah tanggung jawab penulis, dan penulis memahami solusi ini.
+dokumentasi, peninjauan kode, serta paket pencarian Meilisearch
+(`internal/search`), wiring handler ke Meilisearch, dan program
+bulk 1 juta dokumen (`cmd/meili-bulk`). Keputusan akhir, pengujian,
+dan perbaikan adalah tanggung jawab penulis, dan penulis memahami
+solusi ini.
 
 Satu kasus nyata di mana AI memberi jawaban yang tidak cocok, bagaimana
 penulis menyadarinya, dan apa yang dipakai sebagai gantinya:
@@ -295,6 +301,21 @@ Sebagai gantinya dipakai `Invoke-RestMethod` di PowerShell (atau `curl`
 asli di CMD dengan escape `\"...\"`), dan POST pun berhasil dengan 201.
 Pelajaran yang diambil: perintah shell tidak bisa disalin mentah antar
 shell; sintaks kutipnya harus disesuaikan dengan shell yang dipakai.
+
+Kasus kedua, yang lebih relevan dengan soal ini: saat membuat data
+sintetis 1 juta artikel untuk uji skala, AI pertama kali memberi
+generator dengan subquery judul dan body yang tidak terikat ke
+nomor baris, sehingga semua artikel sintetis mendapat judul dan
+body yang persis sama. Penulis menyadarinya dari hasil GET yang
+menampilkan judul/body identik berulang, padahal datanya
+seharusnya beragam. Sebagai gantinya, generator diperbaiki dengan
+`CROSS JOIN LATERAL` yang terikat ke nomor baris (`gs`), sehingga
+setiap baris mendapat kalimat subjek-predikat-objek-tempat yang
+berbeda, dan dicek dengan `SELECT count(DISTINCT title) FROM
+articles WHERE id LIKE 'synth-%'`. Pelajaran yang diambil:
+hasil AI untuk data uji harus dicek distribusinya, bukan hanya
+apakah perintahnya berhasil jalan (INSERT 0 1000000 saja tidak
+cukup sebagai bukti).
 
 ## Future work (tidak dibangun sekarang)
 

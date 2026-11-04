@@ -67,25 +67,87 @@ func (r *Repository) Create(ctx context.Context, authorID, title, body string) (
 	return a, nil
 }
 
+// escapeLike escapes LIKE wildcards so an author fragment is matched
+// literally: "Budi" matches "Budi Santoso", but "%" does not match
+// every author. '!' is the ESCAPE character used in the query below.
+func escapeLike(s string) string {
+	return strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(s)
+}
+
+// AuthorIDs mencari id author dari nama, dengan partial contains,
+// persis seperti yang dipakai List sebelumnya. Dipakai handler
+// waktu memakai Meilisearch, karena Meilisearch butuh daftar id,
+// bukan nama, untuk filter author_id IN [...].
+// Kalau tidak ada yang cocok, kembalikan slice kosong, bukan error,
+// supaya handler bisa langsung mengembalikan data kosong tanpa
+// memanggil Meilisearch.
+func (r *Repository) AuthorIDs(ctx context.Context, name string) ([]string, error) {
+	rows, err := r.pool.Query(ctx, "SELECT id FROM authors WHERE lower(name) LIKE '%' || lower($1) || '%' ESCAPE '!'", escapeLike(name))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	authorIDs := []string{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		authorIDs = append(authorIDs, id)
+	}
+	return authorIDs, rows.Err()
+}
+
+// GetByIDs mengambil artikel lengkap dari Postgres berdasarkan daftar
+// id, lalu menyusun ulang sesuai urutan id yang diminta.
+// Ini penting karena Postgres mengembalikan WHERE id = ANY(...)
+// dalam urutan acak, sedangkan Meilisearch mengembalikan id dalam
+// urutan created_at terbaru dulu. Tanpa penyusunan ulang ini,
+// frontend akan menerima artikel dalam urutan yang salah.
+// Id yang tidak ditemukan di Postgres (misalnya salinan Meilisearch
+// sudah ketinggalan) dilewati saja, bukan error, supaya satu id
+// basi tidak merusak satu halaman penuh. Konsekuensinya, halaman
+// itu bisa jadi satu artikel lebih pendek dari limit, tapi tidak
+// akan muter terus, karena cursor dibuat dari artikel terakhir
+// yang benar-benar dikirim.
+func (r *Repository) GetByIDs(ctx context.Context, ids []string) ([]*Article, error) {
+	if len(ids) == 0 {
+		return []*Article{}, nil
+	}
+	rows, err := r.pool.Query(ctx, `SELECT a.id, a.author_id, au.name, a.title, a.body, a.created_at FROM articles a JOIN authors au ON au.id = a.author_id WHERE a.id = ANY($1)`, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	byID := map[string]*Article{}
+	for rows.Next() {
+		var a Article
+		if err := rows.Scan(&a.ID, &a.AuthorID, &a.AuthorName, &a.Title, &a.Body, &a.CreatedAt); err != nil {
+			return nil, err
+		}
+		art := a
+		byID[art.ID] = &art
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	articles := []*Article{}
+	for _, id := range ids {
+		if a, ok := byID[id]; ok {
+			articles = append(articles, a)
+		}
+	}
+	return articles, nil
+}
+
 func (r *Repository) List(ctx context.Context, f ListFilter) ([]*Article, error) {
 	var authorIDs []string
 	if f.Author != "" {
-		rows, err := r.pool.Query(ctx, "SELECT id FROM authors WHERE lower(name) = lower($1)", f.Author)
+		ids, err := r.AuthorIDs(ctx, f.Author)
 		if err != nil {
 			return nil, err
 		}
-		for rows.Next() {
-			var id string
-			if err := rows.Scan(&id); err != nil {
-				rows.Close()
-				return nil, err
-			}
-			authorIDs = append(authorIDs, id)
-		}
-		rows.Close()
-		if err := rows.Err(); err != nil {
-			return nil, err
-		}
+		authorIDs = ids
 		if len(authorIDs) == 0 {
 			return []*Article{}, nil
 		}
@@ -109,9 +171,21 @@ func (r *Repository) List(ctx context.Context, f ListFilter) ([]*Article, error)
 
 	args = append(args, f.Limit+1)
 
-	query := "SELECT a.id, a.author_id, au.name, a.title, a.body, a.created_at FROM articles a JOIN authors au ON au.id = a.author_id"
-	if len(conds) > 0 {
-		query += " WHERE " + strings.Join(conds, " AND ")
+	// Search with a query: GIN first, then sort. Without MATERIALIZED the
+	// planner may scan newest-first via idx_articles_created and check
+	// every row for a rare term before it can return fewer than Limit rows.
+	query := ""
+	if f.Query != "" {
+		query = "WITH matches AS MATERIALIZED (SELECT a.id FROM articles a"
+		if len(conds) > 0 {
+			query += " WHERE " + strings.Join(conds, " AND ")
+		}
+		query += ") SELECT a.id, a.author_id, au.name, a.title, a.body, a.created_at FROM articles a JOIN matches m ON m.id = a.id JOIN authors au ON au.id = a.author_id"
+	} else {
+		query = "SELECT a.id, a.author_id, au.name, a.title, a.body, a.created_at FROM articles a JOIN authors au ON au.id = a.author_id"
+		if len(conds) > 0 {
+			query += " WHERE " + strings.Join(conds, " AND ")
+		}
 	}
 	query += fmt.Sprintf(" ORDER BY a.created_at DESC, a.id DESC LIMIT $%d", len(args))
 

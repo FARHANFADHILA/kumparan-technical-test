@@ -1,0 +1,305 @@
+openapi: 3.0.3
+info:
+  title: kumparan-articles
+  version: 1.0.0
+  description: |
+    Layanan artikel ringan untuk technical test Backend Engineer kumparan
+    (MagangHub Batch 3). Hanya ada dua endpoint artikel sesuai soal,
+    ditambah satu health check.
+
+    - Urutan selalu terbaru dulu, dengan pagination keyset
+      `(created_at DESC, id DESC)`, tanpa OFFSET dan tanpa COUNT.
+    - `GET /articles` mengembalikan `{data, next_cursor}`.
+      `next_cursor` adalah base64 RawURL dari JSON
+      `{"created_at": "...", "id": "..."}` dari artikel terakhir
+      di halaman itu. Kirim lagi `next_cursor` itu sebagai `cursor`
+      di halaman berikutnya, bersama parameter `query`/`author`/`limit`
+      yang sama. Kalau `next_cursor` bernilai `null`, halaman sudah habis.
+    - Filter `author` adalah partial contains yang case-insensitive:
+      `author=Budi` mengembalikan artikel dari SEMUA author yang
+      namanya mengandung "Budi" (misalnya kedua Budi Santoso),
+      bukan diam-diam satu id saja. Karakter `%` dan `_` dari input
+      di-escape, jadi `author=%` tidak mengembalikan semua author.
+    - Pencarian `query` mencari di judul dan body. Tanpa konfigurasi
+      Meilisearch, pencarian memakai PostgreSQL FTS dengan konfigurasi
+      `simple` (campuran Indonesia/Inggris, tanpa stemming).
+      Kalau Meilisearch dikonfigurasi (`MEILI_HOST` diisi), pencarian
+      dengan `query` memakai Meilisearch dulu dan fallback ke
+      PostgreSQL kalau Meilisearch gagal, dengan bentuk respons yang sama.
+    - Tidak ada autentikasi, dan tidak ada endpoint update/delete
+      di soal ini. `created_at` hanya di-set saat INSERT dan tidak
+      pernah diubah oleh kode.
+servers:
+  - url: /
+    description: Host yang sama dengan halaman /docs (dipakai Try it out di /docs)
+  - url: http://localhost:8080
+    description: Server lokal (port default 8080, bisa diubah lewat .env)
+paths:
+  /articles:
+    post:
+      summary: Buat artikel baru
+      description: |
+        Server yang membuat `id` (UUIDv7) dan `created_at`
+        (DEFAULT now() di database). Klien hanya mengirim
+        `author_id`, `title`, dan `body`. Author harus sudah ada;
+        author yang tidak dikenal tidak pernah dibuat otomatis.
+      operationId: createArticle
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateArticleRequest'
+            example:
+              author_id: author-002
+              title: Uji artikel kedua Budi
+              body: Ini artikel kedua dari Budi Santoso tentang banjir di Pekanbaru.
+      responses:
+        '201':
+          description: Artikel berhasil dibuat
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Article'
+              example:
+                id: 01a19f9f-7fde-77d5-b9bc-0154e2f5acff
+                author_id: author-002
+                author_name: Budi Santoso
+                title: Uji artikel kedua Budi
+                body: Ini artikel kedua dari Budi Santoso tentang banjir di Pekanbaru.
+                created_at: '2026-11-05T01:00:00Z'
+        '400':
+          description: Body JSON tidak valid, field wajib kosong, atau panjang melebihi batas server
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalidJson:
+                  value:
+                    error:
+                      code: invalid_json
+                      message: body JSON tidak valid
+                validation:
+                  value:
+                    error:
+                      code: validation_error
+                      message: author_id, title, dan body wajib diisi
+        '404':
+          description: author_id tidak ditemukan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error:
+                  code: author_not_found
+                  message: author_id tidak ditemukan
+        '500':
+          description: Kesalahan server
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error:
+                  code: internal_error
+                  message: terjadi kesalahan server
+    get:
+      summary: Daftar artikel, terbaru dulu
+      description: |
+        Tanpa parameter, mengembalikan semua artikel terbaru dulu.
+        Dengan `query`, mengembalikan artikel yang judul/body-nya
+        mengandung kata itu. Dengan `author`, mengembalikan artikel
+        dari author yang namanya mengandung fragment itu.
+        Kedua filter bisa dipakai bersamaan, dan keduanya tetap
+        berlaku di halaman berikutnya selama dikirim lagi bersama
+        `cursor` yang baru.
+      operationId: listArticles
+      parameters:
+        - name: query
+          in: query
+          required: false
+          description: Kata kunci di judul dan body. Maksimal 1000 byte di server; lebih dari itu 400.
+          schema:
+            type: string
+          example: banjir
+        - name: author
+          in: query
+          required: false
+          description: Fragment nama author, partial contains, case-insensitive.
+          schema:
+            type: string
+          example: Budi
+        - name: limit
+          in: query
+          required: false
+          description: Jumlah artikel per halaman. Default 20. Lebih dari 100 akan dipotong jadi 100, bukan error. Nol atau bukan angka akan 400.
+          schema:
+            type: integer
+            default: 20
+            minimum: 1
+            maximum: 100
+          example: 20
+        - name: cursor
+          in: query
+          required: false
+          description: next_cursor dari halaman sebelumnya, disalin utuh. Cursor rusak akan 400 invalid_cursor.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Daftar artikel dan cursor halaman berikutnya (null kalau sudah habis)
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ArticleList'
+              example:
+                data:
+                  - id: 01a1a688-d56c-7ea4-a0d7-40a5b8846079
+                    author_id: author-long-02323
+                    author_name: Penulis 2323
+                    title: Uji artikel dengan judul Riau RAI UKA ini begal
+                    body: Ini artikel Budi Santoso tentang banjir di Padang.
+                    created_at: '2026-11-04T12:29:07Z'
+                next_cursor: null
+        '400':
+          description: limit tidak valid, query terlalu panjang, atau cursor tidak valid
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalidCursor:
+                  value:
+                    error:
+                      code: invalid_cursor
+                      message: cursor tidak valid
+                validation:
+                  value:
+                    error:
+                      code: validation_error
+                      message: limit harus angka positif
+  /health:
+    get:
+      summary: Health check (cek database)
+      operationId: healthCheck
+      responses:
+        '200':
+          description: Server hidup dan database bisa di-ping dalam 2 detik
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                  - version
+                properties:
+                  status:
+                    type: string
+                    example: ok
+                  version:
+                    type: string
+                    example: v1.0.0
+        '503':
+          description: Database lambat atau tidak bisa di-ping
+          content:
+            application/json:
+              schema:
+                type: object
+                required:
+                  - status
+                properties:
+                  status:
+                    type: string
+                    example: unhealthy
+components:
+  schemas:
+    Article:
+      type: object
+      required:
+        - id
+        - author_id
+        - author_name
+        - title
+        - body
+        - created_at
+      properties:
+        id:
+          type: string
+          description: ID artikel (TEXT). Artikel dari API memakai UUIDv7; data uji lokal bisa memakai id sintetis seperti synth-0000005.
+          example: 01a19f9f-7fde-77d5-b9bc-0154e2f5acff
+        author_id:
+          type: string
+          example: author-002
+        author_name:
+          type: string
+          description: Nama author, diambil dari tabel authors saat artikel dibuat/dibaca.
+          example: Budi Santoso
+        title:
+          type: string
+          description: Judul artikel. Server menolak title lebih dari 1000 byte.
+          example: Uji artikel kedua Budi
+        body:
+          type: string
+          description: Isi artikel. Server menolak body 1.000.000 byte atau lebih; body request juga dibatasi 1.000.001 byte.
+          example: Ini artikel kedua dari Budi Santoso tentang banjir di Pekanbaru.
+        created_at:
+          type: string
+          format: date-time
+          description: Waktu pembuatan, dari DEFAULT now() di database, tidak pernah diubah.
+          example: '2026-11-05T01:00:00Z'
+    CreateArticleRequest:
+      type: object
+      required:
+        - author_id
+        - title
+        - body
+      properties:
+        author_id:
+          type: string
+          description: ID author yang sudah ada di tabel authors. Tidak ada endpoint POST /authors.
+          example: author-002
+        title:
+          type: string
+          description: Judul, wajib diisi setelah trim, maksimal 1000 byte.
+          example: Uji artikel kedua Budi
+        body:
+          type: string
+          description: Isi, wajib diisi setelah trim, kurang dari 1.000.000 byte.
+          example: Ini artikel kedua dari Budi Santoso tentang banjir di Pekanbaru.
+    ArticleList:
+      type: object
+      required:
+        - data
+        - next_cursor
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Article'
+        next_cursor:
+          type: string
+          nullable: true
+          description: Cursor halaman berikutnya, atau null kalau sudah habis.
+    ErrorResponse:
+      type: object
+      required:
+        - error
+      properties:
+        error:
+          type: object
+          required:
+            - code
+            - message
+          properties:
+            code:
+              type: string
+              enum:
+                - validation_error
+                - invalid_json
+                - author_not_found
+                - invalid_cursor
+                - internal_error
+            message:
+              type: string

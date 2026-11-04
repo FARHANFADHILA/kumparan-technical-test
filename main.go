@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"log"
 	"net/http"
 	"time"
@@ -10,14 +11,30 @@ import (
 	"kumparan-articles/internal/config"
 	"kumparan-articles/internal/handler"
 	"kumparan-articles/internal/repository"
+	"kumparan-articles/internal/search"
 )
+
+//go:embed openapi.yaml
+var openapiYAML []byte
+
+const scalarDocsHTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>kumparan-articles API Docs (Scalar)</title>
+</head>
+<body>
+<script id="api-reference" data-url="/openapi.yaml"></script>
+<script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
+</body>
+</html>`
 
 func main() {
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatal(err)
 	}
-
 	ctx := context.Background()
 	pgcfg, err := pgxpool.ParseConfig(cfg.DatabaseURL)
 	if err != nil {
@@ -44,11 +61,35 @@ func main() {
 	}
 
 	repo := repository.New(pool)
-	h := handler.New(repo)
+	searchClient := search.New(cfg.MeiliHost, cfg.MeiliMasterKey, cfg.MeiliIndex)
+	if searchClient.Enabled() {
+		log.Printf("meilisearch aktif: %s index %s (pencarian dengan query pakai Meilisearch, fallback ke Postgres kalau gagal)", cfg.MeiliHost, cfg.MeiliIndex)
+	} else {
+		log.Printf("meilisearch tidak dikonfigurasi (MEILI_HOST kosong), pencarian pakai Postgres saja")
+	}
+	handler := handler.NewWithSearch(repo, searchClient)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /articles", h.CreateArticle)
-	mux.HandleFunc("GET /articles", h.ListArticles)
+	mux.HandleFunc("POST /articles", handler.CreateArticle)
+	mux.HandleFunc("GET /articles", handler.ListArticles)
+	mux.HandleFunc("GET /openapi.yaml", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/yaml")
+		w.Write(openapiYAML)
+	})
+	// Scalar, dengan spesifikasi yang sama:
+	// /scalar menampilkan dokumentasi Scalar, yang mengambil
+	// /openapi.yaml dari server yang sama, jadi Try it out-nya
+	// juga jalan di host mana pun, tanpa proxy CORS, karena
+	// spec dan API-nya satu origin. Butuh internet sekali
+	// untuk load Scalar dari CDN, sama seperti Swagger UI.
+	mux.HandleFunc("GET /scalar", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write([]byte(scalarDocsHTML))
+	})
+	mux.HandleFunc("GET /scalar/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write([]byte(scalarDocsHTML))
+	})
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		pingCtx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
@@ -58,7 +99,7 @@ func main() {
 			w.Write([]byte(`{"status":"unhealthy"}`))
 			return
 		}
-		w.Write([]byte(`{"status":"ok"}`))
+		w.Write([]byte(`{"status":"ok", "version":"v1.0.0"}`))
 	})
 
 	srv := &http.Server{
