@@ -72,6 +72,7 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /articles", handler.CreateArticle)
 	mux.HandleFunc("GET /articles", handler.ListArticles)
+	mux.HandleFunc("GET /authors", handler.ListAuthors)
 	mux.HandleFunc("GET /openapi.yaml", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/yaml")
 		w.Write(openapiYAML)

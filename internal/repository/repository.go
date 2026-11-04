@@ -23,6 +23,33 @@ type Article struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
+type Author struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// ListAuthors mengembalikan semua author, urut id, untuk discovery:
+// reviewer bisa ambil id dari sini tanpa harus buka file seed.
+// Tidak ada pagination cursor di sini karena jumlah author di seed
+// hanya 4 dan tabel authors tidak punya created_at; kalau jumlah
+// author tumbuh besar, tambahkan limit/cursor seperti di List.
+func (r *Repository) ListAuthors(ctx context.Context) ([]*Author, error) {
+	rows, err := r.pool.Query(ctx, `SELECT id, name FROM authors ORDER BY id ASC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	authors := []*Author{}
+	for rows.Next() {
+		var a Author
+		if err := rows.Scan(&a.ID, &a.Name); err != nil {
+			return nil, err
+		}
+		authors = append(authors, &a)
+	}
+	return authors, rows.Err()
+}
+
 type ListFilter struct {
 	Query           string
 	Author          string

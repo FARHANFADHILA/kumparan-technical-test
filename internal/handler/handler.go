@@ -156,6 +156,18 @@ func (h *Handler) listViaSearch(ctx context.Context, filter repository.ListFilte
 	return h.repo.GetByIDs(ctx, ids)
 }
 
+func (h *Handler) ListAuthors(w http.ResponseWriter, r *http.Request) {
+	authors, err := h.repo.ListAuthors(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "internal_error", "terjadi kesalahan server")
+		return
+	}
+	if authors == nil {
+		authors = []*repository.Author{}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"data": authors})
+}
+
 func (h *Handler) ListArticles(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	filter := repository.ListFilter{

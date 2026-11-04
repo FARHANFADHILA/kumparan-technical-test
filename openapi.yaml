@@ -180,6 +180,33 @@ paths:
                     error:
                       code: validation_error
                       message: limit harus angka positif
+  /authors:
+    get:
+      summary: Daftar author (endpoint tambahan, bukan wajib soal)
+      description: |
+        Endpoint tambahan untuk discovery, supaya reviewer bisa ambil
+        author_id tanpa harus buka file seed. Kembalikan semua author,
+        urut id ASC. Author harus dibuat lewat seed
+        migrations/002_seed.sql, bukan lewat endpoint ini; tidak ada
+        POST /authors. Kalau seed belum dijalankan, data akan kosong.
+      operationId: listAuthors
+      responses:
+        '200':
+          description: Daftar author
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthorsList'
+              example:
+                data:
+                  - id: author-001
+                    name: Budi Santoso
+                  - id: author-002
+                    name: Budi Santoso
+                  - id: author-003
+                    name: Siti Rahma
+                  - id: author-004
+                    name: Kumparan Sindikasi
   /health:
     get:
       summary: Health check (cek database)
@@ -282,6 +309,28 @@ components:
           type: string
           nullable: true
           description: Cursor halaman berikutnya, atau null kalau sudah habis.
+    Author:
+      type: object
+      required:
+        - id
+        - name
+      properties:
+        id:
+          type: string
+          example: author-001
+        name:
+          type: string
+          description: Nama author, tidak unik. Dua author boleh namanya sama persis dengan id berbeda.
+          example: Budi Santoso
+    AuthorsList:
+      type: object
+      required:
+        - data
+      properties:
+        data:
+          type: array
+          items:
+            $ref: '#/components/schemas/Author'
     ErrorResponse:
       type: object
       required:
