@@ -1,7 +1,7 @@
 # kumparan-articles
 
 Layanan artikel ringan untuk technical test Backend Engineer kumparan (MagangHub Batch 3).
-Dua endpoint saja, sesuai soal: `POST /articles` dan `GET /articles`, dengan filter
+Dua endpoint wajib sesuai soal: `POST /articles` dan `GET /articles`, dengan filter
 `query` (pencarian di judul dan body) dan `author` (filter berdasarkan nama penulis),
 diurutkan terbaru dulu.
 
