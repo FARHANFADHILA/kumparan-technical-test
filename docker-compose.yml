@@ -11,6 +11,38 @@ services:
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./migrations:/docker-entrypoint-initdb.d
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U kumparan -d kumparan_articles"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+  meilisearch:
+    image: getmeili/meilisearch:v1.16
+    container_name: kumparan-articles-meilisearch
+    environment:
+      - MEILI_ENV=development
+    ports:
+      - "7700:7700"
+    volumes:
+      - meili_data:/meili_data
+  app:
+    build:
+      context: .
+      dockerfile: dockerfile
+    container_name: kumparan-articles-app
+    environment:
+      DATABASE_URL: postgres://kumparan:kumparan_dev@db:5432/kumparan_articles
+      PORT: "8080"
+      MEILI_HOST: http://meilisearch:7700
+      MEILI_INDEX: articles
+    ports:
+      - "8080:8080"
+    depends_on:
+      db:
+        condition: service_healthy
+      meilisearch:
+        condition: service_started
 
 volumes:
   pgdata:
+  meili_data:
