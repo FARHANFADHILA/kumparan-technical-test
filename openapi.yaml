@@ -37,7 +37,7 @@ servers:
 paths:
   /articles:
     post:
-      summary: Buat artikel baru
+      summary: Create article
       description: |
         Server yang membuat `id` (UUIDv7) dan `created_at`
         (DEFAULT now() di database). Klien hanya mengirim
@@ -106,7 +106,7 @@ paths:
                   code: internal_error
                   message: terjadi kesalahan server
     get:
-      summary: Daftar artikel, terbaru dulu
+      summary: List articles
       description: |
         Tanpa parameter, mengembalikan semua artikel terbaru dulu.
         Dengan `query`, mengembalikan artikel yang judul/body-nya
@@ -176,7 +176,7 @@ paths:
                       message: limit harus angka positif
   /authors:
     get:
-      summary: Daftar author (endpoint tambahan, bukan wajib soal)
+      summary:  List authors
       description: |
         Endpoint tambahan untuk discovery, supaya reviewer bisa ambil
         author_id tanpa harus buka file seed. Kembalikan semua author,
@@ -203,7 +203,7 @@ paths:
                     name: Kumparan Sindikasi
   /health:
     get:
-      summary: Health check (cek database)
+      summary: Health check
       operationId: healthCheck
       responses:
         '200':
