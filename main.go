@@ -2,8 +2,8 @@ package main
 
 import (
 	"context"
-	_ "embed"
 	"log"
+	_ "embed"
 	"net/http"
 	"time"
 
@@ -16,19 +16,6 @@ import (
 
 //go:embed openapi.yaml
 var openapiYAML []byte
-
-const scalarDocsHTML = `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>kumparan-articles API Docs (Scalar)</title>
-</head>
-<body>
-<script id="api-reference" data-url="/openapi.yaml"></script>
-<script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
-</body>
-</html>`
 
 func main() {
 	// untuk log config
@@ -64,24 +51,16 @@ func main() {
 	} else {
 		log.Printf("meilisearch tidak dikonfigurasi (MEILI_HOST kosong), pencarian pakai Postgres saja")
 	}
-	handler := handler.NewWithSearch(repo, searchClient)
+	handler := handler.NewWithSearch(repo, searchClient, openapiYAML)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /articles", handler.CreateArticle)
 	mux.HandleFunc("GET /articles", handler.ListArticles)
 	mux.HandleFunc("GET /authors", handler.ListAuthors)
-	mux.HandleFunc("GET /openapi.yaml", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/yaml")
-		w.Write(openapiYAML)
-	})
-	mux.HandleFunc("GET /scalar", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Write([]byte(scalarDocsHTML))
-	})
-	// mux.HandleFunc("GET /scalar/", func(w http.ResponseWriter, r *http.Request) {
-	// 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	// 	w.Write([]byte(scalarDocsHTML))
-	// })
+	mux.HandleFunc("GET /openapi.yaml", handler.DonwloadOpenApi)
+	mux.HandleFunc("GET /scalar", handler.ScalarDocs)
+	mux.HandleFunc("GET /scalar/", handler.ScalarDocs)
+	
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		pingCtx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
