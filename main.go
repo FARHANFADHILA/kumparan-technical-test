@@ -60,7 +60,7 @@ func main() {
 	mux.HandleFunc("GET /openapi.yaml", handler.DonwloadOpenApi)
 	mux.HandleFunc("GET /scalar", handler.ScalarDocs)
 	mux.HandleFunc("GET /scalar/", handler.ScalarDocs)
-	
+
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		pingCtx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
@@ -70,7 +70,7 @@ func main() {
 			w.Write([]byte(`{"status":"unhealthy"}`))
 			return
 		}
-		w.Write([]byte(`{"status":"ok", "version":"v1.0.0"}`))
+		w.Write([]byte(`{"status":"ok", "version":"v1.0.5"}`))
 	})
 
 	srv := &http.Server{
