@@ -31,21 +31,17 @@ const scalarDocsHTML = `<!DOCTYPE html>
 </html>`
 
 func main() {
+	// untuk config
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatal(err)
 	}
+	// untuk koneksi ke database
 	ctx := context.Background()
 	pgcfg, err := pgxpool.ParseConfig(cfg.DatabaseURL)
 	if err != nil {
 		log.Fatalf("gagal parsing DATABASE_URL: %v", err)
 	}
-	// Pool eksplisit, bukan default pgxpool. Angka ini untuk layanan demo
-	// dengan beban soal (~2,3 tulis/detik rata-rata, burst puluhan per detik):
-	// cukup besar untuk menampung burst baca 100:1, cukup kecil agar tidak
-	// membanjiri satu Postgres. Naikkan MaxConns hanya bersamaan dengan
-	// kenaikan max_connections Postgres dan kapasitas CPU/memori DB.
-	// Nilai defaultnya tinggal di internal/config/config.go.
 	pgcfg.MaxConns = cfg.MaxConns
 	pgcfg.MinConns = cfg.MinConns
 	pgcfg.MaxConnLifetime = cfg.MaxConnLifetime
@@ -77,20 +73,14 @@ func main() {
 		w.Header().Set("Content-Type", "application/yaml")
 		w.Write(openapiYAML)
 	})
-	// Scalar, dengan spesifikasi yang sama:
-	// /scalar menampilkan dokumentasi Scalar, yang mengambil
-	// /openapi.yaml dari server yang sama, jadi Try it out-nya
-	// juga jalan di host mana pun, tanpa proxy CORS, karena
-	// spec dan API-nya satu origin. Butuh internet sekali
-	// untuk load Scalar dari CDN, sama seperti Swagger UI.
 	mux.HandleFunc("GET /scalar", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Write([]byte(scalarDocsHTML))
 	})
-	mux.HandleFunc("GET /scalar/", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Write([]byte(scalarDocsHTML))
-	})
+	// mux.HandleFunc("GET /scalar/", func(w http.ResponseWriter, r *http.Request) {
+	// 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	// 	w.Write([]byte(scalarDocsHTML))
+	// })
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		pingCtx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
