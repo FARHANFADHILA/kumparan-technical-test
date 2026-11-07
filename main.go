@@ -31,13 +31,14 @@ const scalarDocsHTML = `<!DOCTYPE html>
 </html>`
 
 func main() {
-	// untuk config
+	// untuk log config
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatal(err)
 	}
-	// untuk koneksi ke database
 	ctx := context.Background()
+	
+	// untuk koneksi ke database
 	pgcfg, err := pgxpool.ParseConfig(cfg.DatabaseURL)
 	if err != nil {
 		log.Fatalf("gagal parsing DATABASE_URL: %v", err)
