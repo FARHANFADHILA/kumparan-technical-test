@@ -27,7 +27,7 @@ go.work.sum
 
 # env file
 .env
-
+script-test.js
 # Editor/IDE
 # .idea/
 # .vscode/
