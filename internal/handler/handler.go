@@ -15,9 +15,12 @@ import (
 	"kumparan-articles/internal/search"
 )
 
+
+
 type Handler struct {
 	repo   *repository.Repository
 	search *search.Client
+	openapiYAML []byte
 }
 
 func New(repo *repository.Repository) *Handler {
@@ -27,8 +30,8 @@ func New(repo *repository.Repository) *Handler {
 // NewWithSearch sama seperti New, ditambah client Meilisearch.
 // Kalau client-nya nil atau tidak enabled, handler tetap jalan
 // dengan Postgres saja, jadi konstruktor lama di tes tidak rusak.
-func NewWithSearch(repo *repository.Repository, searchClient *search.Client) *Handler {
-	return &Handler{repo: repo, search: searchClient}
+func NewWithSearch(repo *repository.Repository, searchClient *search.Client, openapiYAML []byte) *Handler {
+	return &Handler{repo: repo, search: searchClient, openapiYAML: openapiYAML}
 }
 
 type createRequest struct {
@@ -80,6 +83,23 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 		"error": map[string]string{"code": code, "message": message},
 	})
 }
+
+const scalarDocsHTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>kumparan-articles API Docs (Scalar)</title>
+</head>
+<body>
+<script 
+  id="api-reference" 
+  data-url="/openapi.yaml"
+  data-configuration='{"hideModels": true}'>
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
+</body>
+</html>`
 
 func (h *Handler) CreateArticle(w http.ResponseWriter, r *http.Request) {
 	// Batasi body sebelum di-decode: 1.000.000 byte + 1 byte pendeteksi
@@ -230,4 +250,13 @@ func (h *Handler) ListArticles(w http.ResponseWriter, r *http.Request) {
 		arts = []*repository.Article{}
 	}
 	writeJSON(w, http.StatusOK, listResponse{Data: arts, NextCursor: next})
+}
+func (h *Handler) ScalarDocs(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write([]byte(scalarDocsHTML))
+}
+
+func (h *Handler) DonwloadOpenApi(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/yaml")
+	w.Write(h.openapiYAML)
 }
