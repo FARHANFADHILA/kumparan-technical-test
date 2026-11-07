@@ -21,9 +21,6 @@ type Config struct {
 	MinConns          int32
 	MaxConnLifetime   time.Duration
 	HealthCheckPeriod time.Duration
-	// Meilisearch, opsional: kalau MeiliHost kosong, pencarian tetap
-	// jalan lewat Postgres saja, dan handler akan fallback ke Postgres
-	// kalau Meilisearch mati. Jadi field ini TIDAK wajib diisi.
 	MeiliHost      string
 	MeiliMasterKey string
 	MeiliIndex     string
