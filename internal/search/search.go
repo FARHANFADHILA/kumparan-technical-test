@@ -15,14 +15,10 @@ import (
 	"kumparan-articles/internal/repository"
 )
 
-// ErrDisabled berarti Meilisearch belum dikonfigurasi (host atau index
-// kosong). Handler yang memakai paket ini harus fallback ke Postgres
-// kalau dapat error ini, bukan mengembalikan 500 ke frontend.
 var ErrDisabled = errors.New("meilisearch tidak dikonfigurasi")
 
 // Client adalah koneksi ke satu index Meilisearch.
 // Host contoh: http://localhost:7700 (di laptop) atau
-// http://meilisearch:7700 (di dalam jaringan Docker Compose).
 type Client struct {
 	host       string
 	key        string
@@ -61,14 +57,6 @@ type meiliDoc struct {
 }
 
 // IndexArticle mengirim satu artikel ke Meilisearch.
-// Ia hanya mengirim (PUT documents), tidak menunggu task-nya selesai,
-// karena pengindeksan Meilisearch itu asynchronous: server menjawab
-// 202 Accepted begitu dokumen diterima, lalu mengindeks di belakang
-// layar, biasanya kurang dari 1 detik untuk satu dokumen.
-// Kalau PUT-nya gagal (jaringan putus, kunci salah, index tidak ada),
-// error dikembalikan supaya handler bisa mencatatnya di log, tapi
-// handler TIDAK boleh membatalkan POST Postgres hanya karena ini
-// gagal, karena data asli sudah aman di Postgres.
 func (c *Client) IndexArticle(ctx context.Context, a *repository.Article) error {
 	if !c.Enabled() {
 		return nil
@@ -100,9 +88,6 @@ func (c *Client) IndexArticle(ctx context.Context, a *repository.Article) error 
 }
 
 // searchRequest adalah body POST /indexes/{index}/search.
-// Filter dikirim sebagai satu string, dengan AND di antara syarat,
-// dan OR di dalam syarat cursor. Limit di sini sudah limit+1,
-// supaya pemanggil bisa tahu apakah masih ada halaman berikutnya.
 type searchRequest struct {
 	Q      string   `json:"q"`
 	Filter string   `json:"filter,omitempty"`
@@ -116,19 +101,7 @@ type searchResponse struct {
 	} `json:"hits"`
 }
 
-// SearchIDs mencari di Meilisearch dan mengembalikan daftar id saja,
-// dalam urutan Meilisearch (created_at_ts terbaru, lalu id terbaru).
-// Artikel lengkapnya TIDAK dikembalikan di sini, pemanggil harus
-// mengambilnya dari Postgres dengan id-id ini, lalu menyusun ulang
-// sesuai urutan ini, karena Postgres mengembalikan id dalam urutan
-// acak kalau memakai WHERE id = ANY(...).
-//
-// Parameter cursorCreatedAt dan cursorID berasal dari cursor handler
-// lama (decodeCursor). Kalau cursorCreatedAt nil, berarti halaman
-// pertama, tidak ada filter tanggal.
-// Limit yang diminta adalah limit frontend (misalnya 20), fungsi ini
-// meminta limit+1 ke Meilisearch, supaya pemanggil bisa membedakan
-// "sudah habis" (dapat <= limit) dengan "masih ada" (dapat limit+1).
+// SearchIDs mencari di Meilisearch dan mengembalikan daftar id saja.
 func (c *Client) SearchIDs(ctx context.Context, query string, authorIDs []string, cursorCreatedAt *time.Time, cursorID string, limit int) ([]string, error) {
 	if !c.Enabled() {
 		return nil, ErrDisabled
@@ -170,22 +143,6 @@ func (c *Client) SearchIDs(ctx context.Context, query string, authorIDs []string
 }
 
 // buildFilter membuat string filter Meilisearch dari syarat yang ada.
-// Contoh hasil, kalau ada author dan cursor:
-//   author_id IN ["author-001", "author-002"] AND (created_at_ts < 1767578445 OR (created_at_ts = 1767578445 AND id < "synth-0000005"))
-//
-// Syarat cursor ini penting untuk infinite scroll: ambil yang
-// tanggalnya lebih lama dari pembatas, ATAU tanggalnya sama persis
-// tapi id-nya lebih kecil dari pembatas. Tanpa bagian OR itu,
-// artikel yang tanggalnya sama persis dengan pembatas akan hilang
-// di halaman berikutnya.
-//
-// TES WAJIB SEBELUM HANDLER DIALIHKAN, di Postman:
-//   POST /indexes/articles/search, body:
-//   {"q": "banjir", "filter": "created_at_ts < 1790000000 OR (created_at_ts = 1790000000 AND id < \"synth-0000100\")", "sort": ["created_at_ts:desc", "id:desc"], "limit": 20}
-//   Kalau Meilisearch menolak id < "...", jangan pakai paket ini
-//   untuk halaman berikutnya dulu, kirim error-nya, dan kita ubah
-//   strateginya (misalnya filter created_at_ts saja + batasan tie
-//   yang dicatat di README).
 func buildFilter(authorIDs []string, cursorCreatedAt *time.Time, cursorID string) string {
 	parts := []string{}
 	if len(authorIDs) > 0 {
@@ -225,9 +182,6 @@ type taskStatus struct {
 }
 
 // SetSettings mengirim setting index dan menunggu task-nya sampai
-// succeeded. Fungsi ini dipanggil sekali waktu setup, BUKAN per
-// request, karena setiap perubahan setting membuat Meilisearch
-// mengindeks ulang dan task-nya asynchronous.
 func (c *Client) SetSettings(ctx context.Context) error {
 	if !c.Enabled() {
 		return ErrDisabled
