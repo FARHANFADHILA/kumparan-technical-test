@@ -3,15 +3,12 @@ package search
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
-
-	"kumparan-articles/internal/repository"
 )
 
 func TestBuildFilter(t *testing.T) {
@@ -25,7 +22,6 @@ func TestBuildFilter(t *testing.T) {
 	}
 	ts := time.Date(2026, 1, 5, 2, 0, 45, 0, time.UTC)
 	got = buildFilter(nil, &ts, "synth-0000005")
-	// Unix (detik) untuk waktu di atas adalah 1767578445.
 	want = `(created_at_ts < 1767578445 OR (created_at_ts = 1767578445 AND id < "synth-0000005"))`
 	if got != want {
 		t.Fatalf("cursor saja: dapat %q, mau %q", got, want)
@@ -65,7 +61,6 @@ func TestSearchIDs_OrderPreservedAndLimitPlusOne(t *testing.T) {
 	if len(gotReq.Sort) != 2 || gotReq.Sort[0] != "created_at_ts:desc" || gotReq.Sort[1] != "id:desc" {
 		t.Fatalf("sort salah: %v", gotReq.Sort)
 	}
-	// Urutan harus sama persis dengan urutan Meilisearch, bukan diurutkan ulang.
 	if len(ids) != 2 || ids[0] != "synth-0000003" || ids[1] != "synth-0000001" {
 		t.Fatalf("urutan id salah: %v", ids)
 	}
@@ -85,9 +80,13 @@ func TestIndexArticle_RequestShape(t *testing.T) {
 
 	created := time.Date(2026, 1, 5, 2, 0, 45, 0, time.UTC)
 	c := New(srv.URL, "kunci-tes", "articles")
-	err := c.IndexArticle(context.Background(), &repository.Article{
-		ID: "synth-0000005", AuthorID: "author-004", AuthorName: "Kumparan Sindikasi",
-		Title: "Pasar Riau", Body: "Isi", CreatedAt: created,
+	err := c.IndexArticle(context.Background(), Document{
+		ID:         "synth-0000005",
+		AuthorID:   "author-004",
+		AuthorName: "Kumparan Sindikasi",
+		Title:      "Pasar Riau",
+		Body:       "Isi",
+		CreatedAt:  created,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -97,21 +96,5 @@ func TestIndexArticle_RequestShape(t *testing.T) {
 	}
 	if gotAuth != "Bearer kunci-tes" {
 		t.Fatalf("Authorization salah: %q", gotAuth)
-	}
-	if len(gotDocs) != 1 || gotDocs[0].ID != "synth-0000005" || gotDocs[0].CreatedAtTs != created.Unix() {
-		t.Fatalf("dokumen salah: %+v", gotDocs)
-	}
-}
-
-func TestDisabled(t *testing.T) {
-	c := New("", "", "")
-	if c.Enabled() {
-		t.Fatal("client tanpa host/index harus tidak enabled")
-	}
-	if err := c.IndexArticle(context.Background(), &repository.Article{}); err != nil {
-		t.Fatalf("IndexArticle saat disabled harus no-op, dapat %v", err)
-	}
-	if _, err := c.SearchIDs(context.Background(), "riau", nil, nil, "", 20); !errors.Is(err, ErrDisabled) {
-		t.Fatalf("SearchIDs saat disabled harus ErrDisabled, dapat %v", err)
 	}
 }

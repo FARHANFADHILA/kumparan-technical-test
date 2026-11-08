@@ -2,78 +2,69 @@ package main
 
 import (
 	"context"
-	"log"
 	_ "embed"
+	"log"
 	"net/http"
 	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
+	"kumparan-articles/internal/article"
+	"kumparan-articles/internal/author"
 	"kumparan-articles/internal/config"
-	"kumparan-articles/internal/handler"
-	"kumparan-articles/internal/repository"
-	"kumparan-articles/internal/search"
+	"kumparan-articles/internal/docs"
+	"kumparan-articles/internal/platform/database"
+	"kumparan-articles/internal/platform/search"
+	"kumparan-articles/internal/system"
 )
 
 //go:embed openapi.yaml
 var openapiYAML []byte
 
 func main() {
-	// untuk log config
+	// 1. Muat konfigurasi environment
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatal(err)
+		log.Fatalf("gagal memuat konfigurasi: %v", err)
 	}
+
 	ctx := context.Background()
-	
-	// untuk koneksi ke database
-	pgcfg, err := pgxpool.ParseConfig(cfg.DatabaseURL)
+
+	// 2. Inisialisasi pool koneksi database PostgreSQL
+	pool, err := database.NewPostgresPool(ctx, cfg)
 	if err != nil {
-		log.Fatalf("gagal parsing DATABASE_URL: %v", err)
-	}
-	pgcfg.MaxConns = cfg.MaxConns
-	pgcfg.MinConns = cfg.MinConns
-	pgcfg.MaxConnLifetime = cfg.MaxConnLifetime
-	pgcfg.HealthCheckPeriod = cfg.HealthCheckPeriod
-	pool, err := pgxpool.NewWithConfig(ctx, pgcfg)
-	if err != nil {
-		log.Fatalf("gagal membuat pool database: %v", err)
+		log.Fatalf("gagal inisialisasi database: %v", err)
 	}
 	defer pool.Close()
 
-	if err := pool.Ping(ctx); err != nil {
-		log.Fatalf("gagal konek database: %v", err)
-	}
-
-	repo := repository.New(pool)
+	// 3. Inisialisasi search client (Meilisearch)
 	searchClient := search.New(cfg.MeiliHost, cfg.MeiliMasterKey, cfg.MeiliIndex)
 	if searchClient.Enabled() {
 		log.Printf("meilisearch aktif: %s index %s (pencarian dengan query pakai Meilisearch, fallback ke Postgres kalau gagal)", cfg.MeiliHost, cfg.MeiliIndex)
 	} else {
 		log.Printf("meilisearch tidak dikonfigurasi (MEILI_HOST kosong), pencarian pakai Postgres saja")
 	}
-	
-	handler := handler.NewWithSearch(repo, searchClient, openapiYAML)
 
+	// 4. Inisialisasi per fitur (Feature-Based Architecture)
+	// Fitur Author
+	authorRepo := author.NewRepository(pool)
+	authorHandler := author.NewHandler(authorRepo)
+
+	// Fitur Article
+	articleRepo := article.NewRepository(pool)
+	articleService := article.NewService(articleRepo, searchClient)
+	articleHandler := article.NewHandler(articleService)
+
+	// Fitur Docs & System
+	docsHandler := docs.NewHandler(openapiYAML)
+	systemHandler := system.NewHandler(pool)
+
+	// 5. Registrasi router
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /articles", handler.CreateArticle)
-	mux.HandleFunc("GET /articles", handler.ListArticles)
-	mux.HandleFunc("GET /authors", handler.ListAuthors)
-	mux.HandleFunc("GET /openapi.yaml", handler.DonwloadOpenApi)
-	mux.HandleFunc("GET /scalar", handler.ScalarDocs)
-	mux.HandleFunc("GET /scalar/", handler.ScalarDocs)
+	articleHandler.RegisterRoutes(mux)
+	authorHandler.RegisterRoutes(mux)
+	docsHandler.RegisterRoutes(mux)
+	systemHandler.RegisterRoutes(mux)
 
-	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		pingCtx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
-		defer cancel()
-		if err := pool.Ping(pingCtx); err != nil {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			w.Write([]byte(`{"status":"unhealthy"}`))
-			return
-		}
-		w.Write([]byte(`{"status":"ok", "version":"v1.0.6"}`))
-	})
-
+	// 6. Jalankan HTTP server
 	srv := &http.Server{
 		Addr:              ":" + cfg.Port,
 		Handler:           mux,
@@ -82,6 +73,9 @@ func main() {
 		WriteTimeout:      15 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
+
 	log.Printf("server jalan di :%s", cfg.Port)
-	log.Fatal(srv.ListenAndServe())
+	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Fatalf("server berhenti dengan error: %v", err)
+	}
 }

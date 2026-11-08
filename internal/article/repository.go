@@ -1,67 +1,34 @@
-package repository
+package article
 
 import (
 	"context"
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-var ErrAuthorNotFound = errors.New("author tidak ditemukan")
-
-type Article struct {
-	ID         string    `json:"id"`
-	AuthorID   string    `json:"author_id"`
-	AuthorName string    `json:"author_name"`
-	Title      string    `json:"title"`
-	Body       string    `json:"body"`
-	CreatedAt  time.Time `json:"created_at"`
+// Repository mendefinisikan interface operasi database untuk artikel.
+type Repository interface {
+	Create(ctx context.Context, authorID, title, body string) (*Article, error)
+	AuthorIDs(ctx context.Context, name string) ([]string, error)
+	GetByIDs(ctx context.Context, ids []string) ([]*Article, error)
+	List(ctx context.Context, f ListFilter) ([]*Article, error)
 }
 
-type Author struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
-}
-
-func (r *Repository) ListAuthors(ctx context.Context) ([]*Author, error) {
-	rows, err := r.pool.Query(ctx, `SELECT id, name FROM authors ORDER BY id ASC`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	authors := []*Author{}
-	for rows.Next() {
-		var a Author
-		if err := rows.Scan(&a.ID, &a.Name); err != nil {
-			return nil, err
-		}
-		authors = append(authors, &a)
-	}
-	return authors, rows.Err()
-}
-
-type ListFilter struct {
-	Query           string
-	Author          string
-	CursorCreatedAt *time.Time
-	CursorID        string
-	Limit           int
-}
-
-type Repository struct {
+type pgRepository struct {
 	pool *pgxpool.Pool
 }
 
-func New(pool *pgxpool.Pool) *Repository {
-	return &Repository{pool: pool}
+// NewRepository membuat instance baru PostgreSQL repository untuk artikel.
+func NewRepository(pool *pgxpool.Pool) Repository {
+	return &pgRepository{pool: pool}
 }
 
-func (r *Repository) Create(ctx context.Context, authorID, title, body string) (*Article, error) {
+func (r *pgRepository) Create(ctx context.Context, authorID, title, body string) (*Article, error) {
 	var authorName string
 	err := r.pool.QueryRow(ctx, "SELECT name FROM authors WHERE id = $1", authorID).Scan(&authorName)
 	if err != nil {
@@ -76,7 +43,12 @@ func (r *Repository) Create(ctx context.Context, authorID, title, body string) (
 		return nil, err
 	}
 
-	a := &Article{AuthorID: authorID, AuthorName: authorName, Title: title, Body: body}
+	a := &Article{
+		AuthorID:   authorID,
+		AuthorName: authorName,
+		Title:      title,
+		Body:       body,
+	}
 	err = r.pool.QueryRow(ctx,
 		`INSERT INTO articles (id, author_id, title, body)
 		 VALUES ($1, $2, $3, $4)
@@ -93,12 +65,13 @@ func escapeLike(s string) string {
 	return strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(s)
 }
 
-func (r *Repository) AuthorIDs(ctx context.Context, name string) ([]string, error) {
+func (r *pgRepository) AuthorIDs(ctx context.Context, name string) ([]string, error) {
 	rows, err := r.pool.Query(ctx, "SELECT id FROM authors WHERE lower(name) LIKE '%' || lower($1) || '%' ESCAPE '!'", escapeLike(name))
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
+
 	authorIDs := []string{}
 	for rows.Next() {
 		var id string
@@ -110,7 +83,7 @@ func (r *Repository) AuthorIDs(ctx context.Context, name string) ([]string, erro
 	return authorIDs, rows.Err()
 }
 
-func (r *Repository) GetByIDs(ctx context.Context, ids []string) ([]*Article, error) {
+func (r *pgRepository) GetByIDs(ctx context.Context, ids []string) ([]*Article, error) {
 	if len(ids) == 0 {
 		return []*Article{}, nil
 	}
@@ -119,6 +92,7 @@ func (r *Repository) GetByIDs(ctx context.Context, ids []string) ([]*Article, er
 		return nil, err
 	}
 	defer rows.Close()
+
 	byID := map[string]*Article{}
 	for rows.Next() {
 		var a Article
@@ -131,6 +105,7 @@ func (r *Repository) GetByIDs(ctx context.Context, ids []string) ([]*Article, er
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
+
 	articles := []*Article{}
 	for _, id := range ids {
 		if a, ok := byID[id]; ok {
@@ -140,9 +115,8 @@ func (r *Repository) GetByIDs(ctx context.Context, ids []string) ([]*Article, er
 	return articles, nil
 }
 
-func (r *Repository) List(ctx context.Context, f ListFilter) ([]*Article, error) {
+func (r *pgRepository) List(ctx context.Context, f ListFilter) ([]*Article, error) {
 	var authorIDs []string
-	// fmt.Println("log author", f.Author)
 	if f.Author != "" {
 		ids, err := r.AuthorIDs(ctx, f.Author)
 		if err != nil {
@@ -172,9 +146,6 @@ func (r *Repository) List(ctx context.Context, f ListFilter) ([]*Article, error)
 
 	args = append(args, f.Limit+1)
 
-	// Search with a query: GIN first, then sort. Without MATERIALIZED the
-	// planner may scan newest-first via idx_articles_created and check
-	// every row for a rare term before it can return fewer than Limit rows.
 	query := ""
 	if f.Query != "" {
 		query = "WITH matches AS MATERIALIZED (SELECT a.id FROM articles a"
@@ -190,8 +161,6 @@ func (r *Repository) List(ctx context.Context, f ListFilter) ([]*Article, error)
 	}
 	query += fmt.Sprintf(" ORDER BY a.created_at DESC, a.id DESC LIMIT $%d", len(args))
 
-	// fmt.Printf("QUERY: %s\n", query)
-	// fmt.Printf("ARGS: %v\n", args)
 	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -206,6 +175,5 @@ func (r *Repository) List(ctx context.Context, f ListFilter) ([]*Article, error)
 		}
 		articles = append(articles, &a)
 	}
-	// fmt.Printf("HASIL: %d articles\n", len(articles))
 	return articles, rows.Err()
 }

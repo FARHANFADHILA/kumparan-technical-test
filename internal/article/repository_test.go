@@ -1,4 +1,4 @@
-package repository
+package article
 
 import (
 	"context"
@@ -45,7 +45,7 @@ INSERT INTO authors (id, name) VALUES
 ON CONFLICT (id) DO NOTHING;
 `
 
-func setupTestRepo(t *testing.T) (*Repository, *pgxpool.Pool) {
+func setupTestRepo(t *testing.T) (Repository, *pgxpool.Pool) {
 	t.Helper()
 	url := os.Getenv("TEST_DATABASE_URL")
 	if url == "" {
@@ -61,7 +61,7 @@ func setupTestRepo(t *testing.T) (*Repository, *pgxpool.Pool) {
 		t.Fatalf("gagal menyiapkan skema tes: %v", err)
 	}
 	t.Cleanup(func() { pool.Close() })
-	return New(pool), pool
+	return NewRepository(pool), pool
 }
 
 func TestListExpandsDuplicateAuthorNames(t *testing.T) {
@@ -152,9 +152,6 @@ func TestKeysetPaginationNoDuplicatesOrMissing(t *testing.T) {
 			t.Fatalf("Create ke-%d gagal: %v", i, err)
 		}
 		ids = append(ids, art.ID)
-		// Jeda kecil agar created_at antar artikel tidak semuanya identik
-		// di mesin yang sangat cepat; keyset tetap harus benar walau
-		// waktunya sama, karena id dipakai sebagai tie-breaker.
 		time.Sleep(2 * time.Millisecond)
 	}
 
@@ -170,10 +167,6 @@ func TestKeysetPaginationNoDuplicatesOrMissing(t *testing.T) {
 		if len(arts) == 0 {
 			break
 		}
-		// List mengembalikan Limit+1 baris kalau masih ada halaman berikut.
-		// Di sini repo.List mengembalikan semua baris itu, jadi handler-lah
-		// yang memotongnya; untuk tes ini, ambil maksimal 2 per halaman
-		// dengan cara yang sama seperti handler.
 		hasNext := len(arts) > 2
 		pageArts := arts
 		if hasNext {
@@ -195,7 +188,6 @@ func TestKeysetPaginationNoDuplicatesOrMissing(t *testing.T) {
 	if len(seen) != 5 {
 		t.Fatalf("diharapkan 5 artikel unik dari pagination, dapat %d", len(seen))
 	}
-	// Pastikan tidak ada id di luar yang dibuat di tes ini.
 	for _, id := range ids {
 		if !seen[id] {
 			t.Errorf("id %s hilang dari pagination", id)

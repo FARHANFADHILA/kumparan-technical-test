@@ -11,11 +11,19 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"kumparan-articles/internal/repository"
 )
 
 var ErrDisabled = errors.New("meilisearch tidak dikonfigurasi")
+
+// Document adalah representasi data dokumen yang diindeks ke Meilisearch.
+type Document struct {
+	ID         string
+	Title      string
+	Body       string
+	AuthorID   string
+	AuthorName string
+	CreatedAt  time.Time
+}
 
 // Client adalah koneksi ke satu index Meilisearch.
 type Client struct {
@@ -25,9 +33,7 @@ type Client struct {
 	httpClient *http.Client
 }
 
-// New membuat client baru. Tidak ada koneksi yang dibuka di sini,
-// koneksi baru dibuka waktu request pertama, jadi New tidak akan
-// gagal hanya karena Meilisearch sedang mati.
+// New membuat client Meilisearch baru.
 func New(host, key, index string) *Client {
 	return &Client{
 		host:       strings.TrimRight(host, "/"),
@@ -37,14 +43,11 @@ func New(host, key, index string) *Client {
 	}
 }
 
-// Enabled benar kalau host dan index sudah diisi. Kalau tidak,
-// IndexArticle menjadi no-op dan SearchIDs mengembalikan ErrDisabled.
+// Enabled bernilai true jika host dan index sudah terisi.
 func (c *Client) Enabled() bool {
 	return c != nil && c.host != "" && c.index != ""
 }
 
-// meiliDoc adalah bentuk dokumen yang dikirim ke Meilisearch.
-// created_at_ts dalam detik, SAMA dengan bulk, lihat catatan di atas.
 type meiliDoc struct {
 	ID          string `json:"id"`
 	Title       string `json:"title"`
@@ -55,24 +58,24 @@ type meiliDoc struct {
 	CreatedAtTs int64  `json:"created_at_ts"`
 }
 
-// IndexArticle mengirim satu artikel ke Meilisearch.
-func (c *Client) IndexArticle(ctx context.Context, a *repository.Article) error {
+// IndexArticle mengirim satu dokumen ke Meilisearch index.
+func (c *Client) IndexArticle(ctx context.Context, doc Document) error {
 	if !c.Enabled() {
 		return nil
 	}
-	if a == nil {
-		return errors.New("artikel nil")
+	if doc.ID == "" {
+		return errors.New("id dokumen kosong")
 	}
-	doc := meiliDoc{
-		ID:          a.ID,
-		Title:       a.Title,
-		Body:        a.Body,
-		AuthorID:    a.AuthorID,
-		AuthorName:  a.AuthorName,
-		CreatedAt:   a.CreatedAt.UTC().Format(time.RFC3339),
-		CreatedAtTs: a.CreatedAt.Unix(),
+	mdoc := meiliDoc{
+		ID:          doc.ID,
+		Title:       doc.Title,
+		Body:        doc.Body,
+		AuthorID:    doc.AuthorID,
+		AuthorName:  doc.AuthorName,
+		CreatedAt:   doc.CreatedAt.UTC().Format(time.RFC3339),
+		CreatedAtTs: doc.CreatedAt.Unix(),
 	}
-	payload, err := json.Marshal([]meiliDoc{doc})
+	payload, err := json.Marshal([]meiliDoc{mdoc})
 	if err != nil {
 		return err
 	}
@@ -86,7 +89,6 @@ func (c *Client) IndexArticle(ctx context.Context, a *repository.Article) error 
 	return nil
 }
 
-// searchRequest adalah body POST /indexes/{index}/search.
 type searchRequest struct {
 	Q      string   `json:"q"`
 	Filter string   `json:"filter,omitempty"`
@@ -100,7 +102,7 @@ type searchResponse struct {
 	} `json:"hits"`
 }
 
-// SearchIDs mencari di Meilisearch dan mengembalikan daftar id saja.
+// SearchIDs mencari di Meilisearch dan mengembalikan daftar ID yang sesuai.
 func (c *Client) SearchIDs(ctx context.Context, query string, authorIDs []string, cursorCreatedAt *time.Time, cursorID string, limit int) ([]string, error) {
 	if !c.Enabled() {
 		return nil, ErrDisabled
@@ -132,7 +134,7 @@ func (c *Client) SearchIDs(ctx context.Context, query string, authorIDs []string
 	}
 	var resp searchResponse
 	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, fmt.Errorf("gagal baca hasil search: %v", err)
+		return nil, fmt.Errorf("gagal baca hasil search: %w", err)
 	}
 	ids := make([]string, 0, len(resp.Hits))
 	for _, h := range resp.Hits {
