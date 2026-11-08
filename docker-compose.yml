@@ -7,7 +7,7 @@ services:
       POSTGRES_PASSWORD: kumparan_dev
       POSTGRES_DB: kumparan_articles
     ports:
-      - "5433:5432"
+      - "5434:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./migrations:/docker-entrypoint-initdb.d
@@ -22,9 +22,20 @@ services:
     environment:
       - MEILI_ENV=development
     ports:
-      - "7700:7700"
+      - "7701:7700"
     volumes:
       - meili_data:/meili_data
+  meili-setup:
+    image: curlimages/curl:8.10.1
+    container_name: kumparan-articles-meili-setup
+    depends_on:
+      meilisearch:
+        condition: service_started
+    environment:
+      MEILI_HOST: http://meilisearch:7700
+    volumes:
+      - ./scripts/setup-meilisearch.sh:/setup.sh:ro
+    entrypoint: ["sh", "/setup.sh"]
   app:
     build:
       context: .
@@ -36,12 +47,14 @@ services:
       MEILI_HOST: http://meilisearch:7700
       MEILI_INDEX: articles
     ports:
-      - "8080:8080"
+      - "8081:8080"
     depends_on:
       db:
         condition: service_healthy
       meilisearch:
         condition: service_started
+      meili-setup:
+        condition: service_completed_successfully
 
 volumes:
   pgdata:

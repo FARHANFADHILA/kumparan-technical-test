@@ -18,7 +18,6 @@ import (
 var ErrDisabled = errors.New("meilisearch tidak dikonfigurasi")
 
 // Client adalah koneksi ke satu index Meilisearch.
-// Host contoh: http://localhost:7700 (di laptop) atau
 type Client struct {
 	host       string
 	key        string
@@ -157,83 +156,6 @@ func buildFilter(authorIDs []string, cursorCreatedAt *time.Time, cursorID string
 		parts = append(parts, fmt.Sprintf("(created_at_ts < %d OR (created_at_ts = %d AND id < %s))", ts, ts, strconv.Quote(cursorID)))
 	}
 	return strings.Join(parts, " AND ")
-}
-
-// settingsRequest adalah setting index yang harus ada sebelum
-// SearchIDs dipakai dengan sort dan filter. Tanpa setting ini,
-// Meilisearch akan menolak sort/filter dengan error "not sortable"
-// atau "not filterable", bukan diam-diam mengembalikan hasil salah.
-type settingsRequest struct {
-	SearchableAttributes []string `json:"searchableAttributes"`
-	FilterableAttributes []string `json:"filterableAttributes"`
-	SortableAttributes   []string `json:"sortableAttributes"`
-}
-
-type taskCreated struct {
-	TaskUID int `json:"taskUid"`
-}
-
-type taskStatus struct {
-	Status string `json:"status"`
-	Error  *struct {
-		Message string `json:"message"`
-		Code    string `json:"code"`
-	} `json:"error"`
-}
-
-// SetSettings mengirim setting index dan menunggu task-nya sampai
-func (c *Client) SetSettings(ctx context.Context) error {
-	if !c.Enabled() {
-		return ErrDisabled
-	}
-	payload, err := json.Marshal(settingsRequest{
-		SearchableAttributes: []string{"title", "body"},
-		FilterableAttributes: []string{"author_id", "created_at_ts", "id"},
-		SortableAttributes:   []string{"created_at_ts", "id"},
-	})
-	if err != nil {
-		return err
-	}
-	code, body, err := c.do(ctx, http.MethodPatch, "/indexes/"+c.index+"/settings", payload)
-	if err != nil {
-		return err
-	}
-	if code < 200 || code >= 300 {
-		return fmt.Errorf("meilisearch settings: HTTP %d: %s", code, strings.TrimSpace(string(body)))
-	}
-	var created taskCreated
-	if err := json.Unmarshal(body, &created); err != nil {
-		return fmt.Errorf("gagal baca taskUid settings: %v", err)
-	}
-	deadline := time.Now().Add(60 * time.Second)
-	for time.Now().Before(deadline) {
-		code, body, err := c.do(ctx, http.MethodGet, fmt.Sprintf("/tasks/%d", created.TaskUID), nil)
-		if err != nil {
-			return err
-		}
-		if code < 200 || code >= 300 {
-			return fmt.Errorf("meilisearch cek task settings: HTTP %d: %s", code, strings.TrimSpace(string(body)))
-		}
-		var st taskStatus
-		if err := json.Unmarshal(body, &st); err != nil {
-			return err
-		}
-		switch st.Status {
-		case "succeeded":
-			return nil
-		case "failed", "canceled":
-			if st.Error != nil {
-				return fmt.Errorf("task settings %s: %s (%s)", st.Status, st.Error.Message, st.Error.Code)
-			}
-			return fmt.Errorf("task settings %s", st.Status)
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(300 * time.Millisecond):
-		}
-	}
-	return fmt.Errorf("task settings %d tidak selesai dalam 60 detik", created.TaskUID)
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body []byte) (int, []byte, error) {

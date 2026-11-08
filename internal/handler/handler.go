@@ -204,11 +204,13 @@ func (h *Handler) ListArticles(w http.ResponseWriter, r *http.Request) {
 
 	var arts []*repository.Article
 	var err error
-	// Jalur Meilisearch hanya untuk GET dengan query dan hanya kalau
-	// client dikonfigurasi. Kalau Meilisearch gagal apa pun alasannya,
-	// fallback ke Postgres (MATERIALIZED), bukan 500, supaya frontend
-	// tetap dapat hasil dengan bentuk yang sama.
-	if filter.Query != "" && h.search != nil && h.search.Enabled() {
+	// Jalur Meilisearch untuk GET dengan query ATAU author, dan hanya kalau
+	// client dikonfigurasi. Author diubah dulu jadi daftar id di Postgres
+	// (AuthorIDs), lalu id itu dikirim sebagai filter author_id IN [...].
+	// Kalau Meilisearch gagal apa pun alasannya, fallback ke Postgres
+	// (MATERIALIZED), bukan 500, supaya frontend tetap dapat hasil
+	// dengan bentuk yang sama.
+	if (filter.Query != "" || filter.Author != "") && h.search != nil && h.search.Enabled() {
 		arts, err = h.listViaSearch(r.Context(), filter)
 		if err != nil {
 			log.Printf("meilisearch search gagal, fallback ke Postgres: %v", err)
