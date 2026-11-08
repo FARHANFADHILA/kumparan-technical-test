@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: kumparan-articles
-  version: 1.0.5
+  version: 1.0.6
   description: |
     Layanan artikel ringan untuk technical test Backend Engineer kumparan
     (MagangHub Batch 3). Hanya ada dua endpoint artikel sesuai soal,

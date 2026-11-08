@@ -51,6 +51,7 @@ func main() {
 	} else {
 		log.Printf("meilisearch tidak dikonfigurasi (MEILI_HOST kosong), pencarian pakai Postgres saja")
 	}
+	
 	handler := handler.NewWithSearch(repo, searchClient, openapiYAML)
 
 	mux := http.NewServeMux()
@@ -70,7 +71,7 @@ func main() {
 			w.Write([]byte(`{"status":"unhealthy"}`))
 			return
 		}
-		w.Write([]byte(`{"status":"ok", "version":"v1.0.5"}`))
+		w.Write([]byte(`{"status":"ok", "version":"v1.0.6"}`))
 	})
 
 	srv := &http.Server{

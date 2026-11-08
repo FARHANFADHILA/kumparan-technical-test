@@ -28,11 +28,6 @@ type Author struct {
 	Name string `json:"name"`
 }
 
-// ListAuthors mengembalikan semua author, urut id, untuk discovery:
-// reviewer bisa ambil id dari sini tanpa harus buka file seed.
-// Tidak ada pagination cursor di sini karena jumlah author di seed
-// hanya 4 dan tabel authors tidak punya created_at; kalau jumlah
-// author tumbuh besar, tambahkan limit/cursor seperti di List.
 func (r *Repository) ListAuthors(ctx context.Context) ([]*Author, error) {
 	rows, err := r.pool.Query(ctx, `SELECT id, name FROM authors ORDER BY id ASC`)
 	if err != nil {
@@ -94,20 +89,10 @@ func (r *Repository) Create(ctx context.Context, authorID, title, body string) (
 	return a, nil
 }
 
-// escapeLike escapes LIKE wildcards so an author fragment is matched
-// literally: "Budi" matches "Budi Santoso", but "%" does not match
-// every author. '!' is the ESCAPE character used in the query below.
 func escapeLike(s string) string {
 	return strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(s)
 }
 
-// AuthorIDs mencari id author dari nama, dengan partial contains,
-// persis seperti yang dipakai List sebelumnya. Dipakai handler
-// waktu memakai Meilisearch, karena Meilisearch butuh daftar id,
-// bukan nama, untuk filter author_id IN [...].
-// Kalau tidak ada yang cocok, kembalikan slice kosong, bukan error,
-// supaya handler bisa langsung mengembalikan data kosong tanpa
-// memanggil Meilisearch.
 func (r *Repository) AuthorIDs(ctx context.Context, name string) ([]string, error) {
 	rows, err := r.pool.Query(ctx, "SELECT id FROM authors WHERE lower(name) LIKE '%' || lower($1) || '%' ESCAPE '!'", escapeLike(name))
 	if err != nil {
@@ -125,18 +110,6 @@ func (r *Repository) AuthorIDs(ctx context.Context, name string) ([]string, erro
 	return authorIDs, rows.Err()
 }
 
-// GetByIDs mengambil artikel lengkap dari Postgres berdasarkan daftar
-// id, lalu menyusun ulang sesuai urutan id yang diminta.
-// Ini penting karena Postgres mengembalikan WHERE id = ANY(...)
-// dalam urutan acak, sedangkan Meilisearch mengembalikan id dalam
-// urutan created_at terbaru dulu. Tanpa penyusunan ulang ini,
-// frontend akan menerima artikel dalam urutan yang salah.
-// Id yang tidak ditemukan di Postgres (misalnya salinan Meilisearch
-// sudah ketinggalan) dilewati saja, bukan error, supaya satu id
-// basi tidak merusak satu halaman penuh. Konsekuensinya, halaman
-// itu bisa jadi satu artikel lebih pendek dari limit, tapi tidak
-// akan muter terus, karena cursor dibuat dari artikel terakhir
-// yang benar-benar dikirim.
 func (r *Repository) GetByIDs(ctx context.Context, ids []string) ([]*Article, error) {
 	if len(ids) == 0 {
 		return []*Article{}, nil
@@ -169,6 +142,7 @@ func (r *Repository) GetByIDs(ctx context.Context, ids []string) ([]*Article, er
 
 func (r *Repository) List(ctx context.Context, f ListFilter) ([]*Article, error) {
 	var authorIDs []string
+	// fmt.Println("log author", f.Author)
 	if f.Author != "" {
 		ids, err := r.AuthorIDs(ctx, f.Author)
 		if err != nil {
@@ -216,6 +190,8 @@ func (r *Repository) List(ctx context.Context, f ListFilter) ([]*Article, error)
 	}
 	query += fmt.Sprintf(" ORDER BY a.created_at DESC, a.id DESC LIMIT $%d", len(args))
 
+	// fmt.Printf("QUERY: %s\n", query)
+	// fmt.Printf("ARGS: %v\n", args)
 	rows, err := r.pool.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
@@ -230,5 +206,6 @@ func (r *Repository) List(ctx context.Context, f ListFilter) ([]*Article, error)
 		}
 		articles = append(articles, &a)
 	}
+	// fmt.Printf("HASIL: %d articles\n", len(articles))
 	return articles, rows.Err()
 }

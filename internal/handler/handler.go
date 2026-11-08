@@ -15,21 +15,29 @@ import (
 	"kumparan-articles/internal/search"
 )
 
-
-
 type Handler struct {
-	repo   *repository.Repository
-	search *search.Client
+	repo        *repository.Repository
+	search      *search.Client
 	openapiYAML []byte
 }
 
-func New(repo *repository.Repository) *Handler {
-	return &Handler{repo: repo}
-}
+const scalarDocsHTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>kumparan-articles API Docs (Scalar)</title>
+</head>
+<body>
+<script 
+  id="api-reference" 
+  data-url="/openapi.yaml"
+  data-configuration='{"hideModels": true}'>
+</script>
+<script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
+</body>
+</html>`
 
-// NewWithSearch sama seperti New, ditambah client Meilisearch.
-// Kalau client-nya nil atau tidak enabled, handler tetap jalan
-// dengan Postgres saja, jadi konstruktor lama di tes tidak rusak.
 func NewWithSearch(repo *repository.Repository, searchClient *search.Client, openapiYAML []byte) *Handler {
 	return &Handler{repo: repo, search: searchClient, openapiYAML: openapiYAML}
 }
@@ -84,27 +92,7 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 	})
 }
 
-const scalarDocsHTML = `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>kumparan-articles API Docs (Scalar)</title>
-</head>
-<body>
-<script 
-  id="api-reference" 
-  data-url="/openapi.yaml"
-  data-configuration='{"hideModels": true}'>
-</script>
-<script src="https://cdn.jsdelivr.net/npm/@scalar/api-reference"></script>
-</body>
-</html>`
-
 func (h *Handler) CreateArticle(w http.ResponseWriter, r *http.Request) {
-	// Batasi body sebelum di-decode: 1.000.000 byte + 1 byte pendeteksi
-	// kelebihan. Tanpa ini, validasi panjang body di bawah baru jalan
-	// setelah seluruh body (yang bisa sangat besar) dibaca ke memori.
 	r.Body = http.MaxBytesReader(w, r.Body, 1000001)
 	var req createRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -115,6 +103,7 @@ func (h *Handler) CreateArticle(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid_json", "body JSON tidak valid")
 		return
 	}
+
 	req.AuthorID = strings.TrimSpace(req.AuthorID)
 	req.Title = strings.TrimSpace(req.Title)
 	req.Body = strings.TrimSpace(req.Body)
@@ -141,9 +130,7 @@ func (h *Handler) CreateArticle(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal_error", "terjadi kesalahan server")
 		return
 	}
-	// Salinan ke Meilisearch, kalau dikonfigurasi. Gagal di sini TIDAK
-	// membatalkan POST, karena data asli sudah aman di Postgres.
-	// Artikel yang gagal diindeks bisa diindeks ulang lewat bulk.
+	// Salinan ke Meilisearch
 	if h.search != nil && h.search.Enabled() {
 		if err := h.search.IndexArticle(r.Context(), art); err != nil {
 			log.Printf("meilisearch index gagal untuk %s: %v (artikel tetap tersimpan di Postgres)", art.ID, err)
@@ -152,11 +139,6 @@ func (h *Handler) CreateArticle(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, art)
 }
 
-// listViaSearch adalah jalur Meilisearch untuk GET dengan query:
-// cari id di Meilisearch, ambil artikel lengkap dari Postgres,
-// susun ulang sesuai urutan Meilisearch. Bentuk hasil dan logika
-// limit+1-nya sama persis dengan repo.List, supaya handler di bawah
-// bisa memakai logika next_cursor yang sama tanpa perubahan.
 func (h *Handler) listViaSearch(ctx context.Context, filter repository.ListFilter) ([]*repository.Article, error) {
 	var authorIDs []string
 	if filter.Author != "" {
@@ -193,7 +175,7 @@ func (h *Handler) ListArticles(w http.ResponseWriter, r *http.Request) {
 	filter := repository.ListFilter{
 		Query:  strings.TrimSpace(q.Get("query")),
 		Author: strings.TrimSpace(q.Get("author")),
-		Limit:  20,
+		Limit:  10,
 	}
 	if len(filter.Query) > 1000 {
 		writeError(w, http.StatusBadRequest, "validation_error", "query terlalu panjang, maksimal 1000 byte")
