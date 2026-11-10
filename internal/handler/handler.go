@@ -244,3 +244,66 @@ func (h *Handler) DonwloadOpenApi(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/yaml")
 	w.Write(h.openapiYAML)
 }
+
+func (h *Handler) UpdateArticle(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+
+	r.Body = http.MaxBytesReader(w, r.Body, 1000001)
+	var body repository.UpdateArticleInput
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		if strings.Contains(err.Error(), "request body too large") {
+			writeError(w, http.StatusBadRequest, "validation_error", "body terlalu besar, maksimal 1.000.000 byte")
+			return
+		}
+		writeError(w, http.StatusBadRequest, "invalid_json", "body JSON tidak valid")
+		return
+	}
+
+	// Partial update: boleh kirim title saja, atau body saja.
+	// Field yang tidak dikirim (nil) tidak diubah di Postgres.
+	if body.Title == nil && body.Body == nil {
+		writeError(w, http.StatusBadRequest, "validation_error", "title atau body wajib diisi salah satu")
+		return
+	}
+	if body.Title != nil {
+		*body.Title = strings.TrimSpace(*body.Title)
+		if *body.Title == "" {
+			writeError(w, http.StatusBadRequest, "validation_error", "title tidak boleh kosong")
+			return
+		}
+		if len(*body.Title) > 1000 {
+			writeError(w, http.StatusBadRequest, "validation_error", "title terlalu panjang, maksimal 1000 byte")
+			return
+		}
+	}
+	if body.Body != nil {
+		*body.Body = strings.TrimSpace(*body.Body)
+		if *body.Body == "" {
+			writeError(w, http.StatusBadRequest, "validation_error", "body tidak boleh kosong")
+			return
+		}
+		if len(*body.Body) >= 1000000 {
+			writeError(w, http.StatusBadRequest, "validation_error", "body terlalu panjang, maksimal kurang dari 1.000.000 byte")
+			return
+		}
+	}
+
+	result, err := h.repo.UpdateArticle(r.Context(), id, body.Title, body.Body)
+	if err != nil {
+		if errors.Is(err, repository.ErrArticleNotFound) {
+			writeError(w, http.StatusNotFound, "article_not_found", "artikel tidak ditemukan")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "internal_error", "terjadi kesalahan server")
+		return
+	}
+	// Salinan ke Meilisearch: kirim artikel LENGKAP hasil dari Postgres,
+	// jangan buat Article baru yang cuma berisi title/body, supaya
+	// author_id, author_name, dan created_at di Meilisearch tidak kosong.
+	if h.search != nil && h.search.Enabled() {
+		if err := h.search.IndexArticle(r.Context(), result); err != nil {
+			log.Printf("meilisearch index gagal untuk %s: %v (artikel tetap tersimpan di Postgres)", id, err)
+		}
+	}
+	writeJSON(w, http.StatusOK, result)
+}

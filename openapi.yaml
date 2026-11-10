@@ -4,8 +4,10 @@ info:
   version: 1.0.6
   description: |
     Layanan artikel ringan untuk technical test Backend Engineer kumparan
-    (MagangHub Batch 3). Hanya ada dua endpoint artikel sesuai soal,
-    ditambah satu health check.
+    (MagangHub Batch 3). Dua endpoint artikel sesuai soal (POST dan
+    GET /articles), ditambah satu health check, satu endpoint
+    discovery GET /authors, dan satu endpoint tambahan di luar soal:
+    PUT /articles/{id} untuk update partial title/body.
 
     - Urutan selalu terbaru dulu, dengan pagination keyset
       `(created_at DESC, id DESC)`, tanpa OFFSET dan tanpa COUNT.
@@ -26,9 +28,9 @@ info:
       Kalau Meilisearch dikonfigurasi (`MEILI_HOST` diisi), pencarian
       dengan `query` memakai Meilisearch dulu dan fallback ke
       PostgreSQL kalau Meilisearch gagal, dengan bentuk respons yang sama.
-    - Tidak ada autentikasi, dan tidak ada endpoint update/delete
-      di soal ini. `created_at` hanya di-set saat INSERT dan tidak
-      pernah diubah oleh kode.
+    - Tidak ada autentikasi, dan tidak ada endpoint delete di soal
+      ini. `created_at` hanya di-set saat INSERT dan tidak pernah
+      diubah oleh kode, termasuk oleh PUT /articles/{id}.
 servers:
   - url: /
     description: Host yang sama dengan halaman /docs (dipakai Try it out di /docs)
@@ -174,6 +176,93 @@ paths:
                     error:
                       code: validation_error
                       message: limit harus angka positif
+  /articles/{id}:
+    put:
+      summary: Update article
+      description: |
+        Endpoint tambahan di luar soal. Update partial: boleh kirim
+        title saja, body saja, atau dua-duanya. Field yang tidak
+        dikirim tidak diubah di Postgres. `author_id` tidak bisa
+        diubah lewat endpoint ini, dan `created_at` tidak pernah
+        diubah. Setelah Postgres berhasil, artikel lengkap dikirim
+        lagi ke Meilisearch, supaya author dan created_at di sana
+        tidak kosong.
+      operationId: updateArticle
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: ID artikel yang mau di-update.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateArticleRequest'
+            examples:
+              titleOnly:
+                value:
+                  title: Judul baru saja
+              bodyOnly:
+                value:
+                  body: Isi baru saja
+              both:
+                value:
+                  title: Judul baru
+                  body: Isi baru
+      responses:
+        '200':
+          description: Artikel berhasil di-update, dikembalikan lengkap
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Article'
+              example:
+                id: 01a19f9f-7fde-77d5-b9bc-0154e2f5acff
+                author_id: author-002
+                author_name: Budi Santoso
+                title: Judul baru saja
+                body: Ini artikel kedua dari Budi Santoso tentang banjir di Pekanbaru.
+                created_at: '2026-11-05T01:00:00Z'
+        '400':
+          description: Body JSON tidak valid, tidak ada field yang dikirim, atau field kosong / melebihi batas server
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              examples:
+                invalidJson:
+                  value:
+                    error:
+                      code: invalid_json
+                      message: body JSON tidak valid
+                validation:
+                  value:
+                    error:
+                      code: validation_error
+                      message: title atau body wajib diisi salah satu
+        '404':
+          description: Artikel dengan id itu tidak ditemukan
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error:
+                  code: article_not_found
+                  message: artikel tidak ditemukan
+        '500':
+          description: Kesalahan server
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+              example:
+                error:
+                  code: internal_error
+                  message: terjadi kesalahan server
   /authors:
     get:
       summary:  List authors
@@ -289,6 +378,18 @@ components:
           type: string
           description: Isi, wajib diisi setelah trim, kurang dari 1.000.000 byte.
           example: Ini artikel kedua dari Budi Santoso tentang banjir di Pekanbaru.
+    UpdateArticleRequest:
+      type: object
+      description: Partial update. Tidak ada field yang wajib satu per satu, tapi minimal satu dari title/body harus dikirim. Field yang tidak dikirim tidak diubah.
+      properties:
+        title:
+          type: string
+          description: Judul baru, wajib tidak kosong kalau dikirim, maksimal 1000 byte.
+          example: Judul baru saja
+        body:
+          type: string
+          description: Isi baru, wajib tidak kosong kalau dikirim, kurang dari 1.000.000 byte.
+          example: Isi baru saja
     ArticleList:
       type: object
       required:
@@ -342,6 +443,7 @@ components:
                 - validation_error
                 - invalid_json
                 - author_not_found
+                - article_not_found
                 - invalid_cursor
                 - internal_error
             message:

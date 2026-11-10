@@ -14,6 +14,8 @@ import (
 
 var ErrAuthorNotFound = errors.New("author tidak ditemukan")
 
+var ErrArticleNotFound = errors.New("article tidak ditemukan")
+
 type Article struct {
 	ID         string    `json:"id"`
 	AuthorID   string    `json:"author_id"`
@@ -26,6 +28,34 @@ type Article struct {
 type Author struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
+}
+
+// UpdateArticleInput: field yang nil berarti tidak diubah.
+// Pointer dipakai supaya bisa bedakan "tidak dikirim" (nil)
+// dengan "dikirim kosong" (pointer ke string kosong).
+type UpdateArticleInput struct {
+	Title *string `json:"title"`
+	Body  *string `json:"body"`
+}
+func (r *Repository) UpdateArticle(ctx context.Context, id string, title, body *string) (*Article, error) {
+	var a Article
+	err := r.pool.QueryRow(ctx,
+		`UPDATE articles SET title = COALESCE($1, title), body = COALESCE($2, body) WHERE id = $3 RETURNING id, author_id, title, body, created_at`,
+		title, body, id,
+	).Scan(&a.ID, &a.AuthorID, &a.Title, &a.Body, &a.CreatedAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrArticleNotFound
+		}
+		return nil, err
+	}
+	// Ambil nama penulis, supaya artikel yang dikembalikan lengkap
+	// dan bisa dikirim utuh ke Meilisearch (author_id, author_name,
+	// created_at tidak boleh kosong).
+	if err := r.pool.QueryRow(ctx, `SELECT name FROM authors WHERE id = $1`, a.AuthorID).Scan(&a.AuthorName); err != nil {
+		return nil, err
+	}
+	return &a, nil
 }
 
 func (r *Repository) ListAuthors(ctx context.Context) ([]*Author, error) {
@@ -52,6 +82,7 @@ type ListFilter struct {
 	CursorID        string
 	Limit           int
 }
+
 
 type Repository struct {
 	pool *pgxpool.Pool

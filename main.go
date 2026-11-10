@@ -61,6 +61,7 @@ func main() {
 	mux.HandleFunc("GET /openapi.yaml", handler.DonwloadOpenApi)
 	mux.HandleFunc("GET /scalar", handler.ScalarDocs)
 	mux.HandleFunc("GET /scalar/", handler.ScalarDocs)
+	mux.HandleFunc("PUT /articles/{id}", handler.UpdateArticle)
 
 	mux.HandleFunc("GET /health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
